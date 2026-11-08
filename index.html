@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Structures Lab — VR/MR study lab for Meta Quest 3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#eeece6;font-family:Inter,system-ui,sans-serif;color:#1f2937;touch-action:none}
+  canvas{display:block}
+  #start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;
+    background:rgba(238,236,230,.86);backdrop-filter:blur(3px)}
+  .card{max-width:520px;width:100%;text-align:center}
+  h1{font-weight:800;font-size:clamp(34px,8vw,54px);margin:0;letter-spacing:-.02em}
+  .sub{color:#6b7280;margin:6px 0 18px;font-size:15px}
+  .lead{font-size:15px;line-height:1.55;color:#374151;margin:0 auto 20px;max-width:440px}
+  .btns{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+  button{font:600 16px Inter,sans-serif;border:0;border-radius:14px;padding:15px 18px;cursor:pointer;color:#fff;background:#1f2937}
+  button.b2{background:#2f7fd6} button.b3{background:#fff;color:#1f2937;border:1px solid #d1d5db}
+  button:disabled{opacity:.35;cursor:not-allowed}
+  #status{font-size:13px;color:#6b7280;min-height:18px;margin-bottom:14px}
+  .tip{font-size:13px;color:#6b7280;line-height:1.5;text-align:left;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px 14px}
+  #back{position:fixed;top:12px;left:12px;display:none;padding:8px 14px;font-size:14px;background:#fff;color:#1f2937;border:1px solid #d1d5db}
+  #hint{position:fixed;bottom:10px;left:0;right:0;text-align:center;font-size:12px;color:#6b7280;display:none;pointer-events:none}
+</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}</script>
+</head>
+<body>
+<div id="start"><div class="card">
+  <h1>Structures Lab</h1>
+  <div class="sub">Structures &amp; Stresses · Technology 2º ESO</div>
+  <p class="lead">Learn what a structure is, squeeze, stretch, twist, cut and bend materials with your own hands, explore the 9 types of structures, test bridges and finish with an exam-style test.</p>
+  <div class="btns">
+    <button id="bVR">🥽 Enter virtual reality</button>
+    <button id="bAR" class="b2">🏠 Mixed reality (on your desk)</button>
+    <button id="bFlat" class="b3">🖥️ Study on screen</button>
+  </div>
+  <div id="status">Checking WebXR…</div>
+  <div class="tip"><b>Controls.</b> In the headset, point with either controller and pull the trigger to press buttons or pick objects. On screen, click or tap; drag to look around; use the mouse wheel to zoom. Press <b>ES</b> on any screen to see the Spanish word for each concept.</div>
+</div></div>
+<button id="back">☰ Start</button>
+<div id="hint">Drag to look around · Click or tap to interact</div>
+
+<script type="module">
+import * as THREE from 'three';
+const $=id=>document.getElementById(id), V3=THREE.Vector3, UP=new V3(0,1,0);
+const clamp=THREE.MathUtils.clamp, lerp=THREE.MathUtils.lerp;
+const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+
+// ================= renderer / scene =================
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true; renderer.xr.setReferenceSpaceType('local-floor');
+document.body.prepend(renderer.domElement);
+const BG=new THREE.Color(0xeeece6);
+const scene=new THREE.Scene(); scene.background=BG;
+const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,.02,100);
+const rig=new THREE.Group(); rig.add(camera); scene.add(rig);
+scene.add(new THREE.HemisphereLight(0xffffff,0x8a8070,1.25));
+const sun=new THREE.DirectionalLight(0xffffff,1.3); sun.position.set(1.5,3,2); scene.add(sun);
+
+function canvasTex(w,h,draw,rep){const c=document.createElement('canvas');c.width=w;c.height=h;draw(c.getContext('2d'),w,h);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;if(rep){t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(rep[0],rep[1]);}return t;}
+// blueprint paper texture (isometric grid)
+const PAPER=(rx,ry)=>canvasTex(256,256,(x,w,h)=>{x.fillStyle='#efede7';x.fillRect(0,0,w,h);x.strokeStyle='rgba(120,110,95,.18)';x.lineWidth=1;
+  for(let i=-2;i<=4;i++){x.beginPath();x.moveTo(i*w/2,0);x.lineTo(i*w/2+h*0.577*2,h);x.stroke();x.beginPath();x.moveTo(i*w/2,0);x.lineTo(i*w/2-h*0.577*2,h);x.stroke();}
+  x.strokeStyle='rgba(120,110,95,.12)';for(let i=0;i<=4;i++){x.beginPath();x.moveTo(0,i*h/4);x.lineTo(w,i*h/4);x.stroke();}},[rx,ry]);
+
+// ================= environment (hidden in mixed reality) =================
+const env=new THREE.Group(); scene.add(env);
+const floor=new THREE.Mesh(new THREE.CircleGeometry(7,48),new THREE.MeshStandardMaterial({map:PAPER(24,24),roughness:1}));
+floor.rotation.x=-Math.PI/2; env.add(floor);
+const wall=new THREE.Mesh(new THREE.CylinderGeometry(7,7,6,48,1,true),new THREE.MeshStandardMaterial({map:PAPER(30,6),side:THREE.BackSide,roughness:1}));
+wall.position.y=3; env.add(wall);
+
+// ================= stage (moves with the user in XR) =================
+const stage=new THREE.Group(); scene.add(stage);
+const table=new THREE.Group(); stage.add(table);
+const woodM=new THREE.MeshStandardMaterial({color:0x8a6a48,roughness:.8});
+const top=new THREE.Mesh(new THREE.BoxGeometry(1.1,.04,.7),woodM); top.position.set(0,.84,-.75); table.add(top);
+[[-.5,-.3],[.5,-.3],[-.5,.3],[.5,.3]].forEach(([x,z])=>{const l=new THREE.Mesh(new THREE.BoxGeometry(.05,.82,.05),woodM);l.position.set(x,.41,-.75+z);table.add(l);});
+const modelRoot=new THREE.Group(); modelRoot.position.set(0,.88,-.75); stage.add(modelRoot);
+const pad=new THREE.Mesh(new THREE.CylinderGeometry(.46,.46,.012,64),new THREE.MeshStandardMaterial({color:0xfafaf7,roughness:.9}));
+pad.position.set(0,.875,-.75); stage.add(pad);
+const ring=new THREE.Mesh(new THREE.TorusGeometry(.46,.006,8,80),new THREE.MeshBasicMaterial({color:0x2f7fd6}));
+ring.rotation.x=Math.PI/2; ring.position.set(0,.882,-.75); stage.add(ring);
+const models=new THREE.Group(); modelRoot.add(models);
+
+// ================= materials & helpers =================
+const C={comp:0xd9364a,tens:0x2f7fd6,tors:0x5b3fb3,shear:0xe2a72e,bend:0x22a06b};
+const M=(c,o={})=>new THREE.MeshStandardMaterial({color:c,roughness:.7,metalness:.05,...o});
+const MAT={stone:M(0xd6d0c2),concrete:M(0xbfbab0),steel:M(0x7d8a97,{metalness:.5,roughness:.4}),dark:M(0x374151),yellow:M(0xf2b632),white:M(0xf4f1ea),brown:M(0x8a5a2b)};
+const BRICK=canvasTex(256,256,(x,w,h)=>{x.fillStyle='#cfc7b6';x.fillRect(0,0,w,h);x.strokeStyle='#9c927f';x.lineWidth=4;
+  for(let r=0;r<8;r++){x.beginPath();x.moveTo(0,r*32);x.lineTo(w,r*32);x.stroke();for(let c=0;c<5;c++){const xx=c*64+(r%2)*32;x.beginPath();x.moveTo(xx,r*32);x.lineTo(xx,r*32+32);x.stroke();}}});
+const brickM=new THREE.MeshStandardMaterial({map:BRICK,roughness:.9});
+const UNIT=new THREE.CylinderGeometry(1,1,1,8);
+function bar(mat,r=.006){const m=new THREE.Mesh(UNIT,mat);m.userData.r=r;return m;}
+const _d=new V3();
+function setBar(m,a,b){_d.subVectors(b,a);const L=_d.length()||1e-4;m.position.copy(a).addScaledVector(_d,.5);m.quaternion.setFromUnitVectors(UP,_d.multiplyScalar(1/L));m.scale.set(m.userData.r,L,m.userData.r);}
+function arrow(color,len=.12,r=.008){ // tip at origin, points +Y
+  const g=new THREE.Group(), m=new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.3,roughness:.5});
+  const s=new THREE.Mesh(new THREE.CylinderGeometry(r,r,len*.62,10),m); s.position.y=-len*.69;
+  const h=new THREE.Mesh(new THREE.ConeGeometry(r*2.6,len*.38,16),m); h.position.y=-len*.19; g.add(s,h); return g;}
+function aim(a,tip,dir){a.position.copy(tip);a.quaternion.setFromUnitVectors(UP,dir.clone().normalize());return a;}
+function curvedArrow(color,R=.1,mirror=false){
+  const g=new THREE.Group(), m=new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.3,side:THREE.DoubleSide});
+  const arc=Math.PI*1.4; g.add(new THREE.Mesh(new THREE.TorusGeometry(R,.008,8,40,arc),m));
+  const c=new THREE.Mesh(new THREE.ConeGeometry(.02,.045,16),m); c.position.set(R*Math.cos(arc),R*Math.sin(arc),0);
+  c.quaternion.setFromUnitVectors(UP,new V3(-Math.sin(arc),Math.cos(arc),0)); g.add(c);
+  if(mirror)g.scale.z=-1; return g;}
+function label(text,{fg='#1f2937',bg='rgba(255,255,255,.95)',size=.04,border='#d1d5db'}={}){
+  const c=document.createElement('canvas'),x=c.getContext('2d');x.font='700 44px Inter, sans-serif';const w=Math.ceil(x.measureText(text).width)+44,h=68;
+  c.width=w;c.height=h;x.font='700 44px Inter, sans-serif';x.fillStyle=bg;rr(x,2,2,w-4,h-4,18);x.fill();x.strokeStyle=border;x.lineWidth=3;x.stroke();
+  x.fillStyle=fg;x.textAlign='center';x.textBaseline='middle';x.fillText(text,w/2,h/2+2);
+  const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,depthTest:false}));s.renderOrder=50;s.scale.set(size*w/h,size,1);return s;}
+function rr(x,X,Y,w,h,r){x.beginPath();x.moveTo(X+r,Y);x.arcTo(X+w,Y,X+w,Y+h,r);x.arcTo(X+w,Y+h,X,Y+h,r);x.arcTo(X,Y+h,X,Y,r);x.arcTo(X,Y,X+w,Y,r);x.closePath();}
+function hitSphere(r){return new THREE.Mesh(new THREE.SphereGeometry(r,8,6),new THREE.MeshBasicMaterial({visible:false}));}
+function segBox(w,h,d,seg){const g=new THREE.BoxGeometry(w,h,d,seg,2,1);g.userData.orig=g.attributes.position.array.slice();return g;}
+function bendGeo(geo,L,amp){const o=geo.userData.orig,p=geo.attributes.position.array;for(let i=0;i<p.length;i+=3){const t=(o[i]+L/2)/L;p[i+1]=o[i+1]-amp*Math.sin(Math.PI*clamp(t,0,1));}geo.attributes.position.needsUpdate=true;geo.computeVertexNormals();}
+
+// ================= audio & haptics =================
+let AC=null;
+function initAudio(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}}if(AC&&AC.state==='suspended')AC.resume().catch(()=>{});}
+function tone(f,d=.12,type='sine',v=.15,f2=null,delay=0){if(!AC)return;const t=AC.currentTime+delay,o=AC.createOscillator(),g=AC.createGain();o.type=type;o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g).connect(AC.destination);o.start(t);o.stop(t+d+.03);}
+const SFX={click:()=>tone(660,.06,'triangle',.08),ok:()=>{tone(660,.12,'sine',.15);tone(990,.2,'sine',.13,null,.09);},no:()=>tone(220,.25,'sawtooth',.1,140),
+  creak:()=>tone(120,.6,'sawtooth',.06,70),crash:()=>{tone(160,.5,'square',.1,40);tone(90,.6,'sawtooth',.08,30,.05);},win:()=>[523,659,784,1046].forEach((f,i)=>tone(f,.4,'triangle',.11,null,i*.13))};
+function pulse(int=.4,ms=40){const s=renderer.xr.getSession();if(!s)return;for(const src of s.inputSources){const h=src.gamepad&&src.gamepad.hapticActuators&&src.gamepad.hapticActuators[0];if(h){try{h.pulse(int,ms);}catch(e){}}}}
+
+// ================= progress =================
+let PROG={}; try{PROG=JSON.parse(localStorage.getItem('structures-lab')||'{}');}catch(e){}
+const save=()=>{try{localStorage.setItem('structures-lab',JSON.stringify(PROG));}catch(e){}};
+let ES=false; const term=(en,es)=>ES?`${en} (${es})`:en;
+
+// ================= panel UI (canvas on a 3D plane) =================
+const PW=1024,PH=640, pc=document.createElement('canvas'); pc.width=PW; pc.height=PH; const px=pc.getContext('2d');
+const ptex=new THREE.CanvasTexture(pc); ptex.colorSpace=THREE.SRGBColorSpace; ptex.anisotropy=8;
+const panel=new THREE.Mesh(new THREE.PlaneGeometry(1.2,.75),new THREE.MeshBasicMaterial({map:ptex,transparent:true}));
+panel.position.set(0,1.74,-1.32); panel.rotation.x=.1; stage.add(panel);
+const F='Inter, system-ui, sans-serif';
+let UI=[], hoverIdx=-1, cur=null;
+function redraw(){UI=[];px.clearRect(0,0,PW,PH);px.fillStyle='rgba(251,250,247,.97)';rr(px,4,4,PW-8,PH-8,28);px.fill();px.strokeStyle='#d6d1c6';px.lineWidth=3;px.stroke();
+  if(cur)cur.draw();B(ES?'ES ✓':'ES',PW-118,26,88,48,()=>{ES=!ES;},{bg:ES?'#2f7fd6':'#e5e7eb',fg:ES?'#fff':'#111827',size:22});ptex.needsUpdate=true;}
+function T(text,x,y,size=30,color='#1f2937',weight=400,align='left'){px.font=`${weight} ${size}px ${F}`;px.fillStyle=color;px.textAlign=align;px.textBaseline='alphabetic';px.fillText(text,x,y);}
+function W(text,x,y,maxW,size=27,color='#374151',weight=400,lh=1.34){px.font=`${weight} ${size}px ${F}`;px.fillStyle=color;px.textAlign='left';px.textBaseline='alphabetic';
+  for(const para of String(text).split('\n')){let line='';for(const w of para.split(' ')){const tst=line?line+' '+w:w;if(px.measureText(tst).width>maxW&&line){px.fillText(line,x,y);y+=size*lh;line=w;}else line=tst;}px.fillText(line,x,y);y+=size*lh;}return y;}
+function H(title,num){if(num)T(num,40,72,24,'#2f7fd6',800);T(title,num?40:40,num?112:80,num?40:44,'#111827',800);}
+function B(label,x,y,w,h,fn,{bg='#1f2937',fg='#fff',size=25,disabled=false}={}){const i=UI.length;UI.push({x,y,w,h,fn:disabled?null:fn});
+  px.fillStyle=disabled?'#d1d5db':bg;rr(px,x,y,w,h,14);px.fill();
+  if(i===hoverIdx&&!disabled){px.fillStyle='rgba(255,255,255,.22)';px.fill();px.strokeStyle='#2b7cff';px.lineWidth=5;px.stroke();}
+  let s=size;px.font=`600 ${s}px ${F}`;while(px.measureText(label).width>w-18&&s>14){s--;px.font=`600 ${s}px ${F}`;}
+  px.fillStyle=disabled?'#6b7280':fg;px.textAlign='center';px.textBaseline='middle';px.fillText(label,x+w/2,y+h/2+1);px.textBaseline='alphabetic';}
+const hex=c=>'#'+c.toString(16).padStart(6,'0');
+function buttonAt(uv){const X=uv.x*PW,Y=(1-uv.y)*PH;for(let i=UI.length-1;i>=0;i--){const b=UI[i];if(X>=b.x&&X<=b.x+b.w&&Y>=b.y&&Y<=b.y+b.h)return b.fn?i:-1;}return -1;}
+
+// ================= screens =================
+let clickables=[], modelUpdate=null, hoverObj=null;
+function clearModel(){for(const c of [...models.children])models.remove(c);clickables=[];modelUpdate=null;hoverObj=null;}
+function go(s){if(cur&&cur.exit)cur.exit();cur=s;clearModel();hoverIdx=-1;if(s.enter)s.enter();redraw();}
+function mark(k){PROG[k]=true;save();}
+
+// ---------- shared: truss bridge ----------
+function frameBridge({span=.54,h=.09,n=6,diag=true,mat=MAT.steel}={}){
+  const g=new THREE.Group(), nodes=[], bars=[], decks=[];
+  for(let side=0;side<2;side++)for(let i=0;i<=n;i++){nodes.push({b:new V3(),t:new V3(),i,side});}
+  const N=(side,i)=>nodes[side*(n+1)+i], z=s=>s?.045:-.045;
+  const link=(a,b)=>{const m=bar(mat,.0055);g.add(m);bars.push([a,b,m]);};
+  for(let s=0;s<2;s++)for(let i=0;i<=n;i++){
+    if(i<n){link(N(s,i).b,N(s,i+1).b);link(N(s,i).t,N(s,i+1).t);}
+    link(N(s,i).b,N(s,i).t);
+    if(diag&&i<n){if(i<n/2)link(N(s,i).b,N(s,i+1).t);else link(N(s,i).t,N(s,i+1).b);}
+  }
+  for(let i=0;i<=n;i++){link(N(0,i).t,N(1,i).t);}
+  for(let i=0;i<n;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(1,.008,.1),MAT.concrete);g.add(d);decks.push([i,d]);}
+  function pose(fn){ // fn(i,side) -> {b:[x,y], t:[x,y]}
+    for(const nd of nodes){const p=fn(nd.i,nd.side,span/n*nd.i-span/2,h);nd.b.set(p.b[0],p.b[1],z(nd.side));nd.t.set(p.t[0],p.t[1],z(nd.side));}
+    for(const [a,b,m] of bars)setBar(m,a,b);
+    for(const [i,d] of decks){const a=N(0,i).b,b=N(0,i+1).b;d.position.set((a.x+b.x)/2,(a.y+b.y)/2-.004,0);d.scale.x=Math.hypot(b.x-a.x,b.y-a.y);d.rotation.z=Math.atan2(b.y-a.y,b.x-a.x);}
+  }
+  pose((i,s,x,h)=>({b:[x,0],t:[x,h]}));
+  g.userData={pose,span,n,h,nodes,N}; return g;
+}
+function truck(){const g=new THREE.Group();const body=new THREE.Mesh(new THREE.BoxGeometry(.06,.035,.045),M(0xd9364a));body.position.set(-.008,.03,0);
+  const cab=new THREE.Mesh(new THREE.BoxGeometry(.025,.03,.045),M(0x374151));cab.position.set(.03,.027,0);g.add(body,cab);
+  [[-.025,-.024],[-.025,.024],[.028,-.024],[.028,.024]].forEach(([x,z])=>{const w=new THREE.Mesh(new THREE.CylinderGeometry(.01,.01,.008,12),MAT.dark);w.rotation.x=Math.PI/2;w.position.set(x,.01,z);g.add(w);});return g;}
+
+// ---------- MENU ----------
+const MENU={
+  enter(){const b=frameBridge();b.position.y=.12;models.add(b);modelUpdate=dt=>{b.rotation.y+=dt*.35;};},
+  draw(){
+    T('Structures Lab',40,82,52,'#111827',800); T(term('Structures & Stresses','Estructuras y esfuerzos')+' · Technology 2º ESO',42,124,24,'#6b7280');
+    const items=[['1','What is a structure?','s1',()=>go(S1A)],['2','Forces & the 5 stresses','s2',()=>go(S2A)],['3','The 9 types of structures','s3',()=>go(S3)],['4','Bridge challenge','s4',()=>go(S4)],['5','Final test','quiz',()=>go(Q)]];
+    items.forEach(([n,t,k,fn],i)=>{const y=150+i*76;let tag='';if(k==='quiz'&&PROG.quizBest!=null)tag=`  ·  best ${PROG.quizBest}/10`;else if(PROG[k])tag='  ✓';
+      B(`${n}.  ${t}${tag}`,40,y,660,64,fn,{bg:PROG[k]||(k==='quiz'&&PROG.quizBest!=null)?'#2f7fd6':'#1f2937',size:26});});
+    W('Go in order the first time. Every station explains the concepts and then asks you to use them.\n\nTip: press ES (top right) to see the Spanish word for each concept.',730,170,250,22,'#4b5563');
+    if(renderer.xr.isPresenting){B('Recenter',730,470,250,56,alignStage,{bg:'#e5e7eb',fg:'#111827'});B('Exit headset',730,540,250,56,()=>renderer.xr.getSession().end(),{bg:'#e5e7eb',fg:'#111827'});}
+  }};
+
+// ---------- STATION 1A: what is a structure ----------
+const S1A={
+  enter(){
+    const g=new THREE.Group();models.add(g);
+    const p1=new THREE.Mesh(new THREE.BoxGeometry(.07,.26,.07),MAT.stone),p2=p1.clone();p1.position.set(-.17,.13,0);p2.position.set(.17,.13,0);
+    const lin=new THREE.Mesh(new THREE.BoxGeometry(.5,.07,.09),MAT.stone);lin.position.y=.295;g.add(p1,p2,lin);
+    const arrows=[];for(let i=0;i<5;i++){const a=arrow(C.tens,.08,.005);aim(a,new V3(-.2+i*.1,.335,0),new V3(0,-1,0));g.add(a);arrows.push(a);}
+    const L=(t,pos,anchor)=>{const s=label(t,{size:.035});s.position.copy(pos);g.add(s);const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints([pos,anchor]),new THREE.LineBasicMaterial({color:0x6b7280}));g.add(ln);};
+    L('Elements',new V3(-.33,.22,.08),new V3(-.17,.15,.04));L('Disposition',new V3(.31,.4,.05),new V3(.1,.3,.05));L('Support',new V3(.33,.06,.08),new V3(.2,.02,.04));
+    modelUpdate=()=>{const k=(performance.now()/1000)%1;arrows.forEach(a=>a.position.y=.335+.02*(1-k));};
+  },
+  draw(){H(term('What is a structure?','¿Qué es una estructura?'),'STATION 1');
+    let y=W('A structure is a set of elements arranged in the right way to support loads (forces).',40,170,920,30,'#111827',600);
+    y=W('• Elements: the pieces — blocks of stone, steel or wood.\n• Disposition: the geometry that joins the pieces together.\n• Support: the structure resists its own weight and external forces.',40,y+16,920,27);
+    W('Look at the model on the table: the blue arrows are the loads.',40,y+14,920,23,'#6b7280');
+    B('◀ Menu',40,550,180,64,()=>go(MENU),{bg:'#e5e7eb',fg:'#111827'});B('Natural or artificial? ▶',600,550,380,64,()=>go(S1B),{bg:'#2f7fd6'});}
+};
+
+// ---------- STATION 1B: natural vs artificial sorting ----------
+const SORT=[
+  {n:'Honeycomb',k:'natural',f:'Made of hexagonal cells to use space as efficiently as possible. Bees store larvae, honey and pollen in it.'},
+  {n:"Bird's nest",k:'natural',f:'A light but strong woven structure. Birds build it to breed (raise their chicks).'},
+  {n:'Skeleton',k:'natural',f:'An articulated framework that gives support, shape and movement (mobility) to animals.'},
+  {n:'Crane',k:'artificial',f:'Used since Ancient Greece to multiply human force, lift materials and build on a large scale.'},
+  {n:'Bridge',k:'artificial',f:'Bridges help us overcome geography. They come from the stone blocks and arches used by the Romans.'},
+  {n:'Building',k:'artificial',f:'Buildings make spaces habitable. Modern ones use a frame of beams and pillars.'},
+];
+function sortModel(i){const g=new THREE.Group();
+  if(i===0){const m=M(0xf2b632,{side:THREE.DoubleSide});[[0,0],[.038,0],[-.038,0],[.019,.033],[-.019,.033],[.019,-.033],[-.019,-.033]].forEach(([x,y])=>{const c=new THREE.Mesh(new THREE.CylinderGeometry(.022,.022,.03,6,1,true),m);c.rotation.x=Math.PI/2;c.rotation.y=Math.PI/6;c.position.set(x,y+.06,0);g.add(c);});}
+  if(i===1){const n=new THREE.Mesh(new THREE.TorusGeometry(.038,.015,8,20),MAT.brown);n.rotation.x=Math.PI/2;n.position.y=.018;g.add(n);
+    for(let k=0;k<8;k++){const t=new THREE.Mesh(new THREE.CylinderGeometry(.002,.002,.09,4),M(0x6b4423));t.position.set(Math.cos(k)*.04,.02,Math.sin(k)*.04);t.rotation.set(Math.PI/2,0,k);g.add(t);}
+    [[-.012,0],[.012,.006],[0,-.012]].forEach(([x,z])=>{const e=new THREE.Mesh(new THREE.SphereGeometry(.012,10,8),M(0xa7d8e8));e.scale.y=1.3;e.position.set(x,.02,z);g.add(e);});}
+  if(i===2){const s=new THREE.Mesh(new THREE.CylinderGeometry(.01,.01,.09,10),MAT.white);s.rotation.z=Math.PI/2;g.add(s);[[-.048,.01],[-.048,-.01],[.048,.01],[.048,-.01]].forEach(([x,y])=>{const b=new THREE.Mesh(new THREE.SphereGeometry(.015,10,8),MAT.white);b.position.set(x,y,0);g.add(b);});g.children.forEach(c=>c.position.y+=.03);}
+  if(i===3){const y=MAT.yellow;const mast=new THREE.Mesh(new THREE.BoxGeometry(.012,.13,.012),y);mast.position.y=.065;const jib=new THREE.Mesh(new THREE.BoxGeometry(.11,.01,.01),y);jib.position.set(.03,.13,0);
+    const cw=new THREE.Mesh(new THREE.BoxGeometry(.02,.02,.02),MAT.dark);cw.position.set(-.02,.12,0);const hk=new THREE.Mesh(new THREE.BoxGeometry(.015,.015,.015),MAT.stone);hk.position.set(.075,.07,0);
+    const cab=new THREE.Line(new THREE.BufferGeometry().setFromPoints([new V3(.075,.125,0),new V3(.075,.078,0)]),new THREE.LineBasicMaterial({color:0x111111}));g.add(mast,jib,cw,hk,cab);}
+  if(i===4){const d=new THREE.Mesh(new THREE.BoxGeometry(.12,.01,.03),MAT.stone);d.position.y=.055;g.add(d);
+    [-.04,0,.04].forEach(x=>{const p=new THREE.Mesh(new THREE.BoxGeometry(.012,.05,.03),MAT.stone);p.position.set(x,.025,0);g.add(p);});
+    [-.02,.02].forEach(x=>{const a=new THREE.Mesh(new THREE.TorusGeometry(.017,.004,6,12,Math.PI),MAT.stone);a.position.set(x,.034,0);g.add(a);});}
+  if(i===5){for(let f=0;f<4;f++){const s=new THREE.Mesh(new THREE.BoxGeometry(.07,.006,.05),MAT.concrete);s.position.y=f*.035+.003;g.add(s);}
+    [[-.032,-.022],[.032,-.022],[-.032,.022],[.032,.022]].forEach(([x,z])=>{const p=new THREE.Mesh(new THREE.BoxGeometry(.005,.105,.005),MAT.steel);p.position.set(x,.053,z);g.add(p);});}
+  return g;}
+const S1B={sel:-1,done:[],fb:'',fbOk:null,
+  enter(){this.sel=-1;this.done=[];this.fb='';this.fbOk=null;this.objs=[];
+    const zl=label('NATURAL',{fg:'#15803d',size:.035});zl.position.set(-.25,.12,-.22);models.add(zl);
+    const za=label('ARTIFICIAL',{fg:'#1d4ed8',size:.035});za.position.set(.25,.12,-.22);models.add(za);
+    const order=shuffle([0,1,2,3,4,5]);
+    order.forEach((idx,j)=>{const g=sortModel(idx);const hs=hitSphere(.065);hs.position.y=.05;g.add(hs);g.position.set(-.33+j*.132,0,.12);
+      g.userData={onClick:()=>{if(this.done.includes(idx))return;this.sel=idx;this.fb='';this.fbOk=null;redraw();},base:1,fly:null};models.add(g);clickables.push(g);this.objs[idx]=g;});
+    const cnt={natural:0,artificial:0};this.cnt=cnt;
+    modelUpdate=dt=>{this.objs.forEach((g,i)=>{if(!g)return;const f=g.userData.fly;if(f){f.t=Math.min(1,f.t+dt*1.6);const e=ease(f.t);g.position.lerpVectors(f.a,f.b,e);g.position.y+=Math.sin(Math.PI*f.t)*.12;if(f.t>=1)g.userData.fly=null;}
+      if(i===this.sel)g.rotation.y+=dt*1.5;});};
+  },
+  answer(k){const it=SORT[this.sel];if(it.k===k){SFX.ok();pulse(.5,60);this.done.push(this.sel);const g=this.objs[this.sel];g.rotation.y=0;
+      const c=this.cnt[k]++;g.userData.fly={t:0,a:g.position.clone(),b:new V3((k==='natural'?-.33:.17)+(c%3)*.08,0,-.14-(Math.floor(c/3))*.06)};
+      clickables=clickables.filter(o=>o!==g);this.fb=`Correct! ${it.f}`;this.fbOk=true;this.sel=-1;if(this.done.length===6)mark('s1');}
+    else{SFX.no();this.fb='Not quite. Ask yourself: was it made by nature or designed by people?';this.fbOk=false;}},
+  draw(){H(term('Natural or artificial?','¿Natural o artificial?'),'STATION 1');
+    T(`Sorted: ${this.done.length}/6`,820,112,24,'#6b7280',600);
+    let y=170;
+    if(this.done.length===6){
+      y=W('Natural structures: their origin is biological evolution and adaptation to the environment. Purpose: survival, reproduction, storage and life support. Examples: honeycombs, nests, skeletons.',40,y,930,24);
+      y=W('Artificial structures: their origin is human invention and engineering. Purpose: moving loads, habitability and overcoming geographical obstacles. Examples: cranes, bridges, buildings, viaducts.',40,y+10,930,24);
+      B('◀ Back',40,550,180,64,()=>go(S1A),{bg:'#e5e7eb',fg:'#111827'});B('Next: Forces ▶',640,550,340,64,()=>go(S2A),{bg:'#2f7fd6'});return;}
+    if(this.sel>=0){y=W(`Is the ${SORT[this.sel].n.toLowerCase()} a natural or an artificial structure?`,40,y,930,30,'#111827',600);
+      B('🍃  Natural',40,y+10,300,70,()=>this.answer('natural'),{bg:'#15803d'});B('⚙  Artificial',360,y+10,300,70,()=>this.answer('artificial'),{bg:'#1d4ed8'});y+=100;}
+    else y=W('Click an object on the table to classify it.',40,y,930,30,'#111827',600)+10;
+    if(this.fb)W(this.fb,40,y+10,930,25,this.fbOk?'#15803d':'#b91c1c',600);
+    B('◀ Back',40,550,180,64,()=>go(S1A),{bg:'#e5e7eb',fg:'#111827'});}
+};
+
+// ---------- STATION 2A: forces ----------
+const S2A={
+  enter(){const blk=new THREE.Mesh(new THREE.BoxGeometry(.16,.16,.16),MAT.concrete);blk.position.y=.08;models.add(blk);
+    const push=arrow(C.comp,.14,.012);push.visible=false;models.add(push);
+    const s1=arrow(C.comp,.12,.011),s2=arrow(C.comp,.12,.011);s1.visible=s2.visible=false;models.add(s1,s2);
+    this.mode=null;this.t=0;
+    modelUpdate=dt=>{if(!this.mode)return;this.t+=dt;const k=this.t<1.2?ease(Math.min(1,this.t/1)):Math.max(0,1-(this.t-1.8)/.6);
+      if(this.mode==='push'){blk.scale.set(1,1,1);blk.position.x=-.12+k*.24;push.visible=true;aim(push,new V3(blk.position.x-.085,.08,0),new V3(1,0,0));}
+      else{blk.position.x=0;blk.scale.set(1-.28*k,1+.18*k,1+.18*k);const hx=.08*(1-.28*k)+.005;s1.visible=s2.visible=true;aim(s1,new V3(-hx,.08,0),new V3(1,0,0));aim(s2,new V3(hx,.08,0),new V3(-1,0,0));}
+      if(this.t>2.4){this.mode=null;push.visible=s1.visible=s2.visible=false;blk.scale.set(1,1,1);blk.position.x=0;}};
+  },
+  draw(){H(term('Forces and loads','Fuerzas y cargas'),'STATION 2');
+    let y=W('A force is an action that acts on a body. It can produce two effects:',40,170,930,28,'#111827',600);
+    y=W('• Motion: it changes the trajectory of an object or makes a body at rest move.\n• Deformation: it changes the shape or the inner structure of the material.',40,y+10,930,27);
+    W('Structures exist to resist these forces. Try both effects on the block:',40,y+12,930,24,'#6b7280');
+    B('➜  Push it (motion)',40,450,440,64,()=>{this.mode='push';this.t=0;SFX.click();},{bg:'#374151'});
+    B('➜ ⬛ ⬅  Squeeze it (deformation)',500,450,480,64,()=>{this.mode='squeeze';this.t=0;SFX.creak();pulse(.6,200);},{bg:hex(C.comp)});
+    B('◀ Menu',40,550,180,64,()=>go(MENU),{bg:'#e5e7eb',fg:'#111827'});B('The 5 stresses ▶',640,550,340,64,()=>go(S2B),{bg:'#2f7fd6'});}
+};
+
+// ---------- deformable test bar ----------
+const STRESS=[
+  {k:'comp',en:'Compression',es:'Compresión',alt:'crushing',c:C.comp,d:'Two opposing forces push on the body. They tend to crush or flatten it, making it shorter or thicker.',ex:'Walls and columns.'},
+  {k:'tens',en:'Tension',es:'Tracción',alt:'stretching',c:C.tens,d:'Two opposing forces pull on the body. They tend to stretch it and make it longer.',ex:'Steel cables and tie rods.'},
+  {k:'tors',en:'Torsion',es:'Torsión',alt:'twisting',c:C.tors,d:'Two opposing forces twist the body around its own axis.',ex:'Turning a key or a screwdriver.'},
+  {k:'shear',en:'Shear',es:'Cortadura / cizalladura',alt:'cutting',c:C.shear,d:'Two opposing forces act along very close lines. They tend to cut or slice the material.',ex:'Scissors cutting paper; rivets and bolts.'},
+  {k:'bend',en:'Bending',es:'Flexión',alt:'flexing',c:C.bend,d:'Forces act on the body and tend to flex or bend it.',ex:'A beam or a lintel with a load in the middle.'},
+];
+function makeTestBar(){
+  const g=new THREE.Group();g.position.y=.17;
+  const geo=new THREE.CylinderGeometry(.055,.055,.5,32,48);geo.rotateZ(-Math.PI/2);
+  const pos=geo.attributes.position,orig=pos.array.slice(),col=new Float32Array(pos.count*3);
+  for(let i=0;i<pos.count;i++){const a=Math.atan2(orig[i*3+2],orig[i*3+1]),s=Math.floor((a+Math.PI)/(Math.PI*2)*8)%2,v=s?.62:.82;col[i*3]=v;col[i*3+1]=v;col[i*3+2]=v*1.04;}
+  geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.5,metalness:.15}));g.add(mesh);
+  const A={comp:[arrow(C.comp,.13,.01),arrow(C.comp,.13,.01)],tens:[arrow(C.tens,.13,.01),arrow(C.tens,.13,.01)],shear:[arrow(C.shear,.13,.01),arrow(C.shear,.13,.01)],bend:[arrow(C.bend,.14,.011)],
+    tors:[curvedArrow(C.tors,.1),curvedArrow(C.tors,.1,true)]};
+  A.tors[0].rotation.y=Math.PI/2;A.tors[0].position.x=-.2;A.tors[1].rotation.y=Math.PI/2;A.tors[1].position.x=.2;
+  const sup=[new THREE.Mesh(new THREE.ConeGeometry(.03,.05,3),MAT.dark),new THREE.Mesh(new THREE.ConeGeometry(.03,.05,3),MAT.dark)];
+  sup[0].position.set(-.23,-.08,0);sup[1].position.set(.23,-.08,0);g.add(...sup);
+  Object.values(A).flat().forEach(a=>{g.add(a);a.visible=false;});
+  let type=null,k=0;
+  function deform(){const p=pos.array;for(let i=0;i<p.length;i+=3){const x=orig[i],y=orig[i+1],z=orig[i+2],t=(x+.25)/.5;let r=Math.hypot(y,z),a=Math.atan2(z,y),s=1,X=x,dy=0;
+      if(type==='comp'){X=x*(1-.3*k);s=1+.45*k*Math.sin(Math.PI*t);}
+      else if(type==='tens'){X=x*(1+.35*k);s=1-.38*k*Math.sin(Math.PI*t);}
+      else if(type==='tors'){a+=k*2.6*(t-.5);}
+      else if(type==='shear'){const sm=THREE.MathUtils.smoothstep(t,.47,.53);dy=k*.08*(sm-.5);}
+      else if(type==='bend'){dy=-k*.085*Math.sin(Math.PI*t);}
+      p[i]=X;p[i+1]=Math.cos(a)*r*s+dy;p[i+2]=Math.sin(a)*r*s;}
+    pos.needsUpdate=true;geo.computeVertexNormals();
+    Object.entries(A).forEach(([kk,arr])=>arr.forEach(a=>a.visible=kk===type&&k>.02));sup.forEach(s=>s.visible=type==='bend');
+    const xn=new V3(1,0,0),xm=new V3(-1,0,0),yn=new V3(0,1,0),ym=new V3(0,-1,0);
+    if(type==='comp'){const e=.25*(1-.3*k)+.005;aim(A.comp[0],new V3(-e,0,0),xn);aim(A.comp[1],new V3(e,0,0),xm);}
+    if(type==='tens'){const e=.25*(1+.35*k)+.13;aim(A.tens[0],new V3(-e,0,0),xm);aim(A.tens[1],new V3(e,0,0),xn);}
+    if(type==='shear'){aim(A.shear[0],new V3(-.045,.06-k*.04,0),ym);aim(A.shear[1],new V3(.045,-.06+k*.04,0),yn);}
+    if(type==='bend'){aim(A.bend[0],new V3(0,.06-k*.085,0),ym);}
+    if(type==='tors'){A.tors[0].rotation.x=k*.6;A.tors[1].rotation.x=-k*.6;}
+  }
+  g.userData={set(t,kk){type=t;k=kk;deform();},get type(){return type;}};
+  return g;
+}
+function stressDriver(bar){let want=null,type=null,k=0;return {want(t){want=t;},get type(){return type;},get k(){return k;},
+  update(dt){if(type!==want){k=Math.max(0,k-dt*2.2);if(k===0){type=want;if(type){SFX.creak();pulse(.6,250);}}}else if(type)k=Math.min(1,k+dt*1.1);bar.userData.set(type,ease(k));}};}
+
+// ---------- STATION 2B: explorer ----------
+const S2B={
+  enter(){this.sel=null;const b=makeTestBar();models.add(b);this.drv=stressDriver(b);modelUpdate=dt=>this.drv.update(dt);},
+  draw(){H(term('The 5 mechanical stresses','Los 5 esfuerzos'),'STATION 2');
+    W('Choose a stress and watch what it does to the bar:',40,160,930,24,'#6b7280');
+    STRESS.forEach((s,i)=>B(s.en,40+i*188,180,176,62,()=>{this.sel=i;this.drv.want(s.k);},{bg:hex(s.c),size:24}));
+    if(this.sel!=null){const s=STRESS[this.sel];let y=290;T(`${term(s.en,s.es)}  (${s.alt})`,40,y,32,hex(s.c),800);
+      y=W(s.d,40,y+44,930,27,'#111827');W('Example: '+s.ex,40,y+6,930,26,'#374151',600);}
+    else W('A stress (esfuerzo) is what happens inside a body when loads act on it: the loads try to destroy the structural element.',40,300,930,26);
+    B('◀ Back',40,550,180,64,()=>go(S2A),{bg:'#e5e7eb',fg:'#111827'});B('Game: Name that stress! ▶',560,550,420,64,()=>go(S2C),{bg:'#2f7fd6'});}
+};
+
+// ---------- STATION 2C: name that stress ----------
+const S2C={
+  enter(){this.round=0;this.score=0;this.ans=null;this.N=8;const b=makeTestBar();models.add(b);this.drv=stressDriver(b);modelUpdate=dt=>this.drv.update(dt);this.next();},
+  next(){let t;do{t=STRESS[Math.floor(Math.random()*5)].k;}while(t===this.cur);this.cur=t;this.ans=null;this.drv.want(t);},
+  pick(k){if(this.ans)return;this.ans=k;if(k===this.cur){this.score++;SFX.ok();}else SFX.no();pulse(.4,50);},
+  draw(){H(term('Name that stress!','¡Adivina el esfuerzo!'),'STATION 2');
+    if(this.round>=this.N){const best=Math.max(PROG.s2best||0,this.score);PROG.s2best=best;mark('s2');
+      T(`Score: ${this.score} / ${this.N}`,40,220,48,'#111827',800);W(this.score===this.N?'Perfect! You can recognise all five stresses.':'Play again until you get 8/8. Remember the colours: red compression, blue tension, purple torsion, yellow shear, green bending.',40,280,930,26);
+      B('Play again',40,550,260,64,()=>go(S2C),{bg:'#374151'});B('Next: Types of structures ▶',520,550,460,64,()=>go(S3),{bg:'#2f7fd6'});return;}
+    T(`Round ${this.round+1} / ${this.N}   ·   Score ${this.score}`,40,165,24,'#6b7280',600);
+    W('Look at the bar on the table. Which stress is it suffering?',40,215,930,28,'#111827',600);
+    STRESS.forEach((s,i)=>{let bg='#1f2937';if(this.ans){if(s.k===this.cur)bg='#15803d';else if(s.k===this.ans)bg='#b91c1c';else bg='#9ca3af';}
+      B(term(s.en,s.es),40+i*188,260,176,70,()=>this.pick(s.k),{bg,size:24});});
+    if(this.ans){const s=STRESS.find(x=>x.k===this.cur);W((this.ans===this.cur?'Correct! ':'Not this time. ')+`${s.en}: ${s.d}`,40,385,930,25,this.ans===this.cur?'#15803d':'#b91c1c',600);
+      B('Next ▶',780,550,200,64,()=>{this.round++;if(this.round<this.N)this.next();},{bg:'#2f7fd6'});}
+    B('◀ Back',40,550,180,64,()=>go(S2B),{bg:'#e5e7eb',fg:'#111827'});}
+};
+
+// ---------- STATION 3: the 9 types ----------
+function buildMassive(){const g=new THREE.Group();
+  const py=new THREE.Mesh(new THREE.ConeGeometry(.15,.21,4),MAT.stone);py.rotation.y=Math.PI/4;py.position.set(-.15,.105,0);
+  const wl=new THREE.Mesh(new THREE.BoxGeometry(.22,.18,.07),brickM);wl.position.set(.14,.09,0);g.add(py,wl);
+  const ar=new THREE.Group();g.add(ar);ar.visible=false;
+  [[-.15,.24],[-.2,.12],[-.1,.12],[.07,.22],[.14,.22],[.21,.22],[.07,.12],[.14,.12],[.21,.12]].forEach(([x,y])=>{const a=arrow(C.comp,.07,.006);aim(a,new V3(x,y,.06),new V3(0,-1,0));a.userData.y=y;ar.add(a);});
+  let on=false;return {g,actions:()=>[[on?'Hide the forces':'Show the forces',()=>{on=!on;ar.visible=on;}]],update(){if(!on)return;const k=(performance.now()/900)%1;ar.children.forEach(a=>a.position.y=a.userData.y-.04*k);}};}
+function buildLintel(){const g=new THREE.Group();
+  const p1=new THREE.Mesh(new THREE.BoxGeometry(.06,.24,.08),MAT.stone),p2=p1.clone();p1.position.set(-.18,.12,0);p2.position.set(.18,.12,0);
+  const lg=segBox(.5,.06,.1,24),lin=new THREE.Mesh(lg,MAT.stone);lin.position.y=.27;g.add(p1,p2,lin);
+  const load=arrow(C.bend,.13,.011);g.add(load);const pa=[arrow(C.comp,.08,.007),arrow(C.comp,.08,.007)];pa.forEach(a=>g.add(a));
+  let on=false,k=0;return {g,actions:()=>[[on?'Remove the load':'Put a load on it',()=>{on=!on;if(on){SFX.creak();pulse(.5,200);}}]],
+    update(dt){k=clamp(k+(on?dt:-dt)*1.4,0,1);const e=ease(k);bendGeo(lg,.5,.035*e);load.visible=k>0;aim(load,new V3(0,.3-.035*e+.002,0),new V3(0,-1,0));
+      pa.forEach((a,i)=>{a.visible=k>.5;aim(a,new V3(i?.18:-.18,.05,.045),new V3(0,-1,0));});}};}
+function buildVault(){const g=new THREE.Group();
+  [-.2,.2].forEach(x=>{const p=new THREE.Mesh(new THREE.BoxGeometry(.08,.14,.12),MAT.stone);p.position.set(x,.07,0);g.add(p);});
+  const R=.16,N=9,vs=[];for(let i=0;i<N;i++){const th=Math.PI-(i+.5)/N*Math.PI,len=Math.PI*R/N*.96;
+    const m=new THREE.Mesh(new THREE.BoxGeometry(len,.05,.12),i===4?M(0xc9a96e):MAT.stone);m.position.set(R*Math.cos(th),.14+R*Math.sin(th),0);m.rotation.z=th-Math.PI/2;g.add(m);
+    vs.push({m,p0:m.position.clone(),r0:m.rotation.z,v:new V3(),w:0});}
+  const lab=label('Keystone',{size:.03});lab.position.set(0,.4,.05);g.add(lab);
+  let state='ok',t=0;
+  return {g,actions:()=>[state==='ok'?['Remove the keystone',()=>{state='fall';t=0;SFX.crash();pulse(.9,300);vs.forEach((v,i)=>{v.v.set((i-4)*.05,i===4?.6:0,0);v.w=(i-4)*.8;});}]:['Rebuild the arch',()=>{state='ok';vs.forEach(v=>{v.m.position.copy(v.p0);v.m.rotation.z=v.r0;v.m.visible=true;});lab.visible=true;}]],
+    update(dt){if(state!=='fall')return;t+=dt;lab.visible=false;vs.forEach((v,i)=>{if(i===4){v.m.position.y+=dt*.3;if(t>.6)v.m.visible=false;return;}if(t<.35)return;
+      v.v.y-=2.5*dt;v.m.position.addScaledVector(v.v,dt);v.m.rotation.z+=v.w*dt;if(v.m.position.y<.03){v.m.position.y=.03;v.v.set(0,0,0);v.w=0;}});}};}
+function buildFrame(){const g=new THREE.Group(),P=[],Bm=[];const pm=M(0x9aa4ae),bm=M(0x9aa4ae);
+  const xs=[-.16,0,.16],zs=[-.08,.08];
+  xs.forEach(x=>zs.forEach(z=>{const p=new THREE.Mesh(new THREE.BoxGeometry(.016,.3,.016),pm.clone());p.position.set(x,.15,z);g.add(p);P.push(p);}));
+  [.1,.2,.3].forEach(y=>{zs.forEach(z=>{const b=new THREE.Mesh(new THREE.BoxGeometry(.33,.016,.016),bm.clone());b.position.set(0,y,z);g.add(b);Bm.push(b);});
+    xs.forEach(x=>{const b=new THREE.Mesh(new THREE.BoxGeometry(.016,.016,.17),bm.clone());b.position.set(x,y,0);g.add(b);Bm.push(b);});
+    const s=new THREE.Mesh(new THREE.BoxGeometry(.33,.004,.17),new THREE.MeshStandardMaterial({color:0xdde3ea,transparent:true,opacity:.35}));s.position.y=y+.01;g.add(s);});
+  const l1=label('Pillars → compression',{fg:'#b91c1c',size:.028});l1.position.set(-.2,.36,.1);const l2=label('Beams → bending',{fg:'#15803d',size:.028});l2.position.set(.2,.4,.1);g.add(l1,l2);l1.visible=l2.visible=false;
+  let on=false;return {g,actions:()=>[[on?'Hide the stresses':'Show the stresses',()=>{on=!on;P.forEach(p=>p.material.color.setHex(on?C.comp:0x9aa4ae));Bm.forEach(b=>b.material.color.setHex(on?C.bend:0x9aa4ae));l1.visible=l2.visible=on;}]],update(){}};}
+function buildTruss(){const g=new THREE.Group(),mat=MAT.steel;
+  const sq=[bar(mat,.008),bar(mat,.008),bar(mat,.008),bar(mat,.008)],dg=bar(M(0xd9364a),.008),tr=[bar(mat,.008),bar(mat,.008),bar(mat,.008)];
+  [...sq,dg,...tr].forEach(b=>g.add(b));
+  const joint=()=>{const j=new THREE.Mesh(new THREE.SphereGeometry(.013,12,8),MAT.dark);g.add(j);return j;};const J=[joint(),joint(),joint(),joint(),joint(),joint(),joint()];
+  const pa=arrow(0x111827,.1,.008);g.add(pa);const pb=arrow(0x111827,.1,.008);g.add(pb);
+  const l1=label('Square',{size:.03}),l2=label('Triangle',{size:.03});l1.position.set(-.17,.3,0);l2.position.set(.17,.3,0);g.add(l1,l2);
+  let diag=false,ps=0,pt=0,ts=-1,tt=-1;
+  const push=(p)=>p<0?0:Math.sin(Math.PI*Math.min(1,p/1.6));
+  return {g,actions:()=>[['Push the square',()=>{ts=0;SFX.creak();pulse(.6,200);}],[diag?'Remove the diagonal':'Add a diagonal',()=>{diag=!diag;}],['Push the triangle',()=>{tt=0;SFX.click();}]],
+    update(dt){if(ts>=0){ts+=dt;if(ts>1.6)ts=-1;}if(tt>=0){tt+=dt;if(tt>1.6)tt=-1;}
+      const h=.2,phi=push(ts)*(diag?.02:.65);const A=new V3(-.27,0,0),Bp=new V3(-.07,0,0),Cp=new V3(-.07+h*Math.sin(phi),h*Math.cos(phi),0),D=new V3(-.27+h*Math.sin(phi),h*Math.cos(phi),0);
+      setBar(sq[0],A,Bp);setBar(sq[1],Bp,Cp);setBar(sq[2],Cp,D);setBar(sq[3],D,A);dg.visible=diag;if(diag)setBar(dg,A,Cp);
+      const w=push(tt)*.004,E=new V3(.07,0,0),Fp=new V3(.27,0,0),G=new V3(.17+w,.2,0);setBar(tr[0],E,Fp);setBar(tr[1],Fp,G);setBar(tr[2],G,E);
+      [A,Bp,Cp,D,E,Fp,G].forEach((p,i)=>J[i].position.copy(p));
+      pa.visible=ts>=0;aim(pa,new V3(D.x-.01,D.y,0),new V3(1,0,0));pb.visible=tt>=0;aim(pb,new V3(G.x-.01,G.y,0),new V3(1,0,0));}};}
+function buildLaminar(){const g=new THREE.Group(),n=24,geo=new THREE.BufferGeometry(),pos=[],idx=[];
+  for(let i=0;i<=n;i++)for(let j=0;j<=n;j++){const x=-.2+.4*i/n,z=-.2+.4*j/n;pos.push(x,.17+2.2*(x*x-z*z),z);}
+  for(let i=0;i<n;i++)for(let j=0;j<n;j++){const a=i*(n+1)+j,b=a+n+1;idx.push(a,b,a+1,b,b+1,a+1);}
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));geo.setIndex(idx);geo.computeVertexNormals();
+  g.add(new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:0xe9e4d8,side:THREE.DoubleSide,roughness:.8})));
+  g.add(new THREE.LineSegments(new THREE.WireframeGeometry(geo),new THREE.LineBasicMaterial({color:0x8a8070,transparent:true,opacity:.35})));
+  [-.2,.2].forEach(z=>{const p=new THREE.Mesh(new THREE.CylinderGeometry(.01,.012,.082,8),MAT.dark);p.position.set(0,.041,z);g.add(p);});
+  const curve=(fn)=>new THREE.CatmullRomCurve3(Array.from({length:21},(_,i)=>fn(-.2+.4*i/20)));
+  const ten=new THREE.Mesh(new THREE.TubeGeometry(curve(x=>new V3(x,.172+2.2*x*x,0)),40,.007,8),M(C.tens,{emissive:C.tens,emissiveIntensity:.5}));
+  const com=new THREE.Mesh(new THREE.TubeGeometry(curve(z=>new V3(0,.172-2.2*z*z,z)),40,.007,8),M(C.comp,{emissive:C.comp,emissiveIntensity:.5}));
+  const l1=label('Hangs like a cable → tension',{fg:'#1d4ed8',size:.026}),l2=label('Works like an arch → compression',{fg:'#b91c1c',size:.026});l1.position.set(0,.36,0);l2.position.set(0,.06,.26);
+  g.add(ten,com,l1,l2);[ten,com,l1,l2].forEach(o=>o.visible=false);let on=false;
+  return {g,actions:()=>[[on?'Hide the forces':'Show the forces',()=>{on=!on;[ten,com,l1,l2].forEach(o=>o.visible=on);}]],update(dt){g.rotation.y+=dt*.25;}};}
+function buildGeodesic(){const g=new THREE.Group(),ico=new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(.2,2)),p=ico.attributes.position.array,keep=[];
+  for(let i=0;i<p.length;i+=6){if(p[i+1]>=-.001&&p[i+4]>=-.001)keep.push(p[i],p[i+1],p[i+2],p[i+3],p[i+4],p[i+5]);}
+  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(keep,3));const col=new Float32Array(keep.length);geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+  const lines=new THREE.LineSegments(geo,new THREE.LineBasicMaterial({vertexColors:true}));g.add(lines);
+  const fill=new THREE.Mesh(new THREE.SphereGeometry(.198,32,16,0,Math.PI*2,0,Math.PI/2),new THREE.MeshStandardMaterial({color:0xdfe7ef,transparent:true,opacity:.35,side:THREE.DoubleSide}));g.add(fill);
+  const load=arrow(C.comp,.12,.01);g.add(load);aim(load,new V3(0,.205,0),new V3(0,-1,0));load.visible=false;
+  let t=-1;const paint=()=>{for(let i=0;i<keep.length;i+=3){const d=Math.acos(clamp(keep[i+1]/.2,-1,1));const k=t<0?0:clamp((t*.9-d)*3,0,1)*(t>3?Math.max(0,1-(t-3)):1);
+    col[i]=.35+.5*k;col[i+1]=.38-.1*k;col[i+2]=.42-.2*k;}geo.attributes.color.needsUpdate=true;};paint();
+  return {g,actions:()=>[['Put a load on top',()=>{t=0;SFX.creak();pulse(.5,200);}]],update(dt){g.rotation.y+=dt*.2;if(t>=0){t+=dt;load.visible=t<3;if(t>4)t=-1;paint();}}};}
+function buildSuspended(){const g=new THREE.Group();
+  const deck=new THREE.Mesh(new THREE.BoxGeometry(.62,.012,.08),MAT.concrete);deck.position.y=.1;g.add(deck);
+  [-.17,.17].forEach(x=>[-.04,.04].forEach(z=>{const t=new THREE.Mesh(new THREE.BoxGeometry(.016,.3,.016),MAT.steel);t.position.set(x,.15,z);g.add(t);}));
+  const cm=M(0x5b6470),cables=[],hangers=[];
+  [-.04,.04].forEach(z=>{const pts=[new V3(-.31,.105,z),new V3(-.17,.3,z)];for(let i=1;i<20;i++){const x=-.17+.34*i/20;pts.push(new V3(x,.135+.165*Math.pow(x/.17,2),z));}pts.push(new V3(.17,.3,z),new V3(.31,.105,z));
+    const c=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts,false,'catmullrom',.1),80,.0035,6),cm);g.add(c);cables.push(c);
+    for(let i=-7;i<=7;i++){const x=i*.022,y=.135+.165*Math.pow(x/.17,2);const h=bar(cm,.0015);setBar(h,new V3(x,.106,z),new V3(x,y,z));g.add(h);hangers.push(h);}});
+  const ups=[];[-.1,0,.1].forEach(x=>{const a=arrow(C.tens,.06,.005);aim(a,new V3(x,.135+.165*Math.pow(x/.17,2)+.07,.06),UP);a.visible=false;g.add(a);ups.push(a);});
+  let on=false;return {g,actions:()=>[[on?'Hide the tension':'Show the tension',()=>{on=!on;cm.color.setHex(on?C.tens:0x5b6470);cm.emissive.setHex(on?C.tens:0);cm.emissiveIntensity=.4;ups.forEach(a=>a.visible=on);}]],update(){}};}
+function buildInflatable(){const g=new THREE.Group(),dome=new THREE.Group();g.add(dome);
+  dome.add(new THREE.Mesh(new THREE.SphereGeometry(.2,40,20,0,Math.PI*2,0,Math.PI/2),new THREE.MeshStandardMaterial({color:0x9cc7ef,transparent:true,opacity:.5,side:THREE.DoubleSide,roughness:.2})));
+  for(let i=0;i<16;i++){const a=i/16*Math.PI*2,pts=[];for(let j=0;j<=16;j++){const p=j/16*Math.PI/2;pts.push(new V3(.201*Math.sin(p)*Math.cos(a),.201*Math.cos(p),.201*Math.sin(p)*Math.sin(a)));}
+    dome.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:0x3b6ea5})));}
+  const door=new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,.06,16,1,true,0,Math.PI),new THREE.MeshStandardMaterial({color:0x7fb0e0,side:THREE.DoubleSide}));door.rotation.z=Math.PI/2;door.rotation.y=Math.PI/2;door.position.set(0,0,.2);dome.add(door);
+  const air=[];for(let i=0;i<6;i++){const a=arrow(C.tens,.07,.005),an=i/6*Math.PI*2;aim(a,new V3(Math.cos(an)*.15,.1,Math.sin(an)*.15),new V3(Math.cos(an),.6,Math.sin(an)));air.push(a);g.add(a);}
+  const up=arrow(C.tens,.07,.005);aim(up,new V3(0,.17,0),UP);air.push(up);g.add(up);
+  let infl=true,k=1;return {g,actions:()=>[[infl?'Let the air out':'Pump air in',()=>{infl=!infl;SFX.click();}]],
+    update(dt){k=clamp(k+(infl?dt:-dt)*.8,.08,1);dome.scale.set(1+(1-k)*.15,k,1+(1-k)*.15);air.forEach(a=>a.visible=k>.9);}};}
+const TYPES=[
+  {en:'Massive structures',es:'Estructuras masivas',st:'Compression',mass:.05,eff:.06,d:'They pile up a lot of heavy material (walls, stone blocks, temples, pyramids) to resist enormous forces of pure compression.',b:buildMassive},
+  {en:'Lintel structures',es:'Estructuras adinteladas',st:'Bending in the lintel · compression in the supports',mass:.25,eff:.25,d:'A horizontal element (the lintel) rests on vertical supports. The load makes the central lintel bend.',b:buildLintel},
+  {en:'Vaulted structures',es:'Estructuras abovedadas',st:'Compression',mass:.3,eff:.5,d:'They use arches and vaults, which send the weight efficiently to the sides. This leaves large open spaces underneath. The keystone holds the arch together.',b:buildVault},
+  {en:'Framed structures',es:'Estructuras entramadas',st:'Compression in pillars · bending in beams',mass:.45,eff:.5,d:'A grid of vertical pillars and horizontal beams. Common in modern construction: they form a rigid internal skeleton.',b:buildFrame},
+  {en:'Truss (triangulated) structures',es:'Estructuras trianguladas',st:'Tension and compression in the bars',mass:.57,eff:.5,d:'Bars joined to form triangles. The triangle is the only geometric figure that cannot be deformed: maximum rigidity with minimum weight.',b:buildTruss},
+  {en:'Laminar structures',es:'Estructuras laminares',st:'Compression and tension along the surface',mass:.66,eff:.55,d:'Very thin curved surfaces. Their own shape guides compression and tension forces. Extremely light and resistant.',b:buildLaminar},
+  {en:'Geodesic structures',es:'Estructuras geodésicas',st:'Spread evenly over the whole surface',mass:.63,eff:.68,d:'Domes made of a network of polygons, usually triangles. They spread the stresses evenly over the whole spherical surface.',b:buildGeodesic},
+  {en:'Suspended structures',es:'Estructuras colgadas (suspendidas)',st:'Tension in the cables',mass:.8,eff:.78,d:'Steel cables and stays that only work in tension hold up heavy decks. Ideal for bridges and viaducts.',b:buildSuspended},
+  {en:'Inflatable structures',es:'Estructuras neumáticas (hinchables)',st:'Tension (traction) in the membrane',mass:.95,eff:.93,d:'Flexible membranes that keep their shape thanks to the air pressure inside, which keeps the material in constant tension.',b:buildInflatable},
+];
+const S3={i:0,
+  enter(){this.load();},
+  load(){clearModel();const t=TYPES[this.i];this.inst=t.b();models.add(this.inst.g);modelUpdate=dt=>this.inst.update(dt);if(this.i===TYPES.length-1)mark('s3');},
+  draw(){const t=TYPES[this.i];H(term(t.en,t.es),`STATION 3  ·  TYPE ${this.i+1} OF 9`);
+    T('Main stress: ',40,160,24,'#6b7280',600);T(t.st,190,160,24,'#111827',600);
+    W(t.d,40,200,930,26);
+    const bx=40,bw=520;const scale=(y,lab1,lab2,v,c1,c2)=>{T(lab1,bx,y,18,'#6b7280',600);T(lab2,bx+bw,y,18,'#6b7280',600,'right');const g=px.createLinearGradient(bx,0,bx+bw,0);g.addColorStop(0,c1);g.addColorStop(1,c2);px.fillStyle=g;rr(px,bx,y+8,bw,10,5);px.fill();
+      px.fillStyle='#111827';px.beginPath();px.arc(bx+v*bw,y+13,11,0,7);px.fill();};
+    scale(368,'Mass: heavy','light',t.mass,'#7f1d1d','#93c5fd');scale(418,'Effort: compression','tension',t.eff,hex(C.comp),hex(C.tens));
+    this.inst.actions().forEach(([l,fn],j)=>B(l,600,345+j*62,380,54,()=>{fn();},{bg:'#22a06b',size:22}));
+    B('◀ Prev',40,550,170,64,()=>{this.i=(this.i+8)%9;this.load();},{bg:'#374151'});
+    B('Next ▶',225,550,170,64,()=>{this.i=(this.i+1)%9;this.load();},{bg:'#374151'});
+    B('Menu',410,550,140,64,()=>go(MENU),{bg:'#e5e7eb',fg:'#111827'});
+    B('Bridge challenge ▶',600,550,380,64,()=>go(S4),{bg:'#2f7fd6'});}
+};
+
+// ---------- STATION 4: bridge challenge ----------
+const DESIGNS=[{k:'beam',n:'Flat beam'},{k:'square',n:'Square frame'},{k:'truss',n:'Triangles (truss)'}];
+const S4={
+  enter(){this.pred=null;this.res={};this.cur=null;this.state='idle';this.build('truss');},
+  build(k){clearModel();this.cur=k;this.state='idle';const g=new THREE.Group();g.position.y=.02;models.add(g);
+    [-1,1].forEach(s=>{const c=new THREE.Mesh(new THREE.BoxGeometry(.16,.2,.14),M(0xa89f8c));c.position.set(s*.35,.1,0);g.add(c);});
+    const tk=truck();g.add(tk);tk.position.set(-.36,.2,0);this.tk=tk;this.g=g;this.x=-.36;this.vy=0;this.fall=0;
+    if(k==='beam'){const L=new THREE.Group(),R=new THREE.Group();L.position.set(-.27,.2,0);R.position.set(.27,.2,0);
+      const pl=new THREE.Mesh(new THREE.BoxGeometry(.27,.012,.1),MAT.wood||M(0xa77b4f));const pr=pl.clone();pl.position.set(.135,-.006,0);pr.position.set(-.135,-.006,0);L.add(pl);R.add(pr);g.add(L,R);this.parts={L,R,ang:0};}
+    else{const b=frameBridge({diag:k==='truss'});b.position.y=.2;g.add(b);this.parts={b,c:0,drop:0};}
+    clickables=[];modelUpdate=dt=>this.update(dt);},
+  deckY(x){if(this.cur==='beam'){const a=this.parts.ang;return .2-(x<0?(x+.27):(.27-x))*Math.tan(a);}
+    if(this.cur==='square')return .2-this.parts.c*.12*Math.cos(Math.PI*x/.54)-this.parts.drop;return .2-.006*Math.cos(Math.PI*x/.54)*(this.state==='run'?1:0);},
+  update(dt){const P=this.parts;if(this.state!=='run'&&this.state!=='fall')return;
+    if(this.state==='run'){this.x+=dt*.15;const x=this.x,on=Math.abs(x)<.27;
+      if(this.cur==='beam'){if(on)P.ang=.06*(1-Math.abs(x)/.27);if(x>-.04&&!P.broken){P.broken=true;SFX.crash();pulse(1,300);this.state='fall';}}
+      if(this.cur==='square'&&x>-.27){P.c=Math.min(1,P.c+dt*.9);if(P.c>.25&&!P.cr){P.cr=1;SFX.creak();}if(P.c>=1){SFX.crash();pulse(1,300);this.state='fall';}}
+      if(this.cur==='truss'&&x>.36){this.state='done';this.res.truss=true;SFX.win();pulse(.5,100);this.finish();}
+      this.tk.position.set(x,Math.abs(x)<.28?this.deckY(x):.2,0);}
+    if(this.state==='fall'){this.fall+=dt;
+      if(this.cur==='beam'){P.ang=Math.min(1.25,P.ang+dt*2.5);}
+      if(this.cur==='square'){P.drop=Math.min(.18,P.drop+this.fall*dt*1.5);}
+      this.vy-=2*dt;this.tk.position.y=Math.max(.035,this.tk.position.y+this.vy*dt);this.tk.rotation.z=Math.max(-.9,this.tk.rotation.z-dt*1.5);
+      if(this.fall>1.4){this.state='done';this.res[this.cur]=false;this.finish();}}
+    if(this.cur==='beam'){P.L.rotation.z=-P.ang;P.R.rotation.z=P.ang;}
+    else{const c=this.cur==='square'?P.c:(this.state==='run'?1:0),sq=this.cur==='square';
+      P.b.userData.pose((i,s,x,h)=>{const sag=sq?c*.12*Math.cos(Math.PI*x/.54):.006*c*Math.cos(Math.PI*x/.54),phi=sq?c*.9:0;return {b:[x,-sag],t:[x+h*Math.sin(phi),-sag+h*Math.cos(phi)]};});
+      P.b.position.y=.2-P.drop;}},
+  finish(){if(Object.keys(this.res).length===3)mark('s4');},
+  run(){if(this.state==='run'||this.state==='fall')return;this.build(this.cur);this.state='run';SFX.click();},
+  draw(){H(term('Bridge challenge','Reto del puente'),'STATION 4');
+    if(!this.pred){W('A truck has to cross the gap. Three bridges use the same amount of steel or wood. Which one will hold the truck?',40,170,930,28,'#111827',600);
+      DESIGNS.forEach((d,i)=>B(d.n,40+i*318,300,300,70,()=>{this.pred=d.k;},{bg:'#374151'}));W('Make your prediction first!',40,420,930,24,'#6b7280');
+      B('◀ Menu',40,550,180,64,()=>go(MENU),{bg:'#e5e7eb',fg:'#111827'});return;}
+    T('Your prediction: '+DESIGNS.find(d=>d.k===this.pred).n,40,160,24,'#6b7280',600);
+    DESIGNS.forEach((d,i)=>{const r=this.res[d.k];const mk=r===true?'  ✓':r===false?'  ✗':'';B(d.n+mk,40+i*318,185,300,60,()=>{this.build(d.k);},{bg:this.cur===d.k?'#2f7fd6':'#374151',size:23});});
+    B('▶  Drive the truck',40,262,300,60,()=>this.run(),{bg:'#22a06b'});
+    const msg={beam:'The flat beam bends (bending) in the middle until it breaks.',square:'The square frame has no triangles: the squares deform into rhombuses and the bridge collapses.',truss:'The triangulated bridge hardly moves: triangles cannot be deformed.'};
+    let y=360;if(this.res[this.cur]!==undefined)y=W(msg[this.cur],40,y,930,26,this.res[this.cur]?'#15803d':'#b91c1c',600);
+    if(Object.keys(this.res).length===3){W(`Conclusion: ${this.pred==='truss'?'you predicted it!':'the winner is the truss.'} The triangle is the only geometric figure that cannot be deformed, so truss structures give maximum rigidity with minimum weight.`,40,y+8,930,24,'#111827');
+      B('Final test ▶',640,550,340,64,()=>go(Q),{bg:'#2f7fd6'});}
+    else W('Test all three bridges.',40,y+8,930,24,'#6b7280');
+    B('◀ Menu',40,550,180,64,()=>go(MENU),{bg:'#e5e7eb',fg:'#111827'});}
+};
+MAT.wood=M(0xa77b4f);
+
+// ---------- STATION 5: final test ----------
+const QS=[
+  ['What is a structure?',['A set of elements arranged to support loads','A machine that produces energy','A single piece of very hard material','Any object made of steel'],'A structure is a set of elements arranged in the right way to support loads.'],
+  ['Which of these is a NATURAL structure?',['A honeycomb','A crane','A viaduct','A building'],'Natural structures come from evolution: honeycombs, nests and skeletons.'],
+  ['Which of these is an ARTIFICIAL structure?',['A crane','A bird\'s nest','A skeleton','A honeycomb'],'Artificial structures are invented by people: cranes, bridges, buildings, viaducts.'],
+  ['Why do bees build hexagonal cells?',['To use space as efficiently as possible','Because hexagons look nicer','To make the honeycomb heavier','To let the air pass through'],'Hexagonal cells give maximum spatial efficiency to store larvae, honey and pollen.'],
+  ['A force acting on a body can produce…',['Motion or deformation','Only light','Only heat','Nothing at all'],'A force can make a body move (motion) or change its shape (deformation).'],
+  ['Which stress tends to crush a body and make it shorter?',['Compression','Tension','Torsion','Shear'],'Compression: two opposing forces push on the body. Example: walls and columns.'],
+  ['Steel cables and tie rods mainly work in…',['Tension','Compression','Bending','Torsion'],'Tension: two opposing forces pull and stretch the body.'],
+  ['Which stress twists a body around its own axis?',['Torsion','Bending','Shear','Tension'],'Torsion twists the body around its axis.'],
+  ['Two opposing forces along very close lines tend to cut the material. This stress is…',['Shear','Compression','Bending','Torsion'],'Shear tends to cut or slice the material.'],
+  ['A beam with a load in the middle mainly suffers…',['Bending','Tension','Torsion','Shear'],'Bending: the forces tend to flex the beam.'],
+  ['Walls and columns mainly suffer…',['Compression','Tension','Torsion','Shear'],'Walls and columns are crushed by the weight above them: compression.'],
+  ['Why are truss structures made of triangles?',['The triangle is the only geometric figure that cannot be deformed','Triangles use more material','Triangles are easier to paint','Squares are too light'],'Triangles give maximum rigidity with minimum weight.'],
+  ['Which structures use arches and vaults to send the weight to the sides?',['Vaulted structures','Lintel structures','Inflatable structures','Suspended structures'],'Vaulted structures leave large open spaces underneath.'],
+  ['A horizontal element resting on two vertical supports is typical of…',['Lintel structures','Geodesic structures','Laminar structures','Inflatable structures'],'In lintel structures the lintel suffers bending.'],
+  ['Inflatable structures keep their shape thanks to…',['The air pressure inside','Heavy stone blocks','Steel triangles','Arches'],'The internal air pressure keeps the membrane in tension.'],
+  ['In a suspended bridge, the cables work in…',['Tension','Compression','Torsion','Shear'],'Cables and stays work only in tension.'],
+  ['Domes made of a network of triangles that spread the stress over the whole surface are…',['Geodesic structures','Massive structures','Framed structures','Lintel structures'],'Geodesic domes spread stresses evenly over the whole spherical surface.'],
+  ['Very thin curved surfaces that are light and resistant are…',['Laminar structures','Massive structures','Lintel structures','Framed structures'],'Laminar structures guide forces through their thin curved shape.'],
+  ['Which type of structure is the heaviest?',['Massive','Inflatable','Suspended','Geodesic'],'Massive structures pile up heavy material and work in compression.'],
+  ['Framed structures are formed by…',['A grid of beams and pillars','Only cables','A single thin curved surface','Air pressure'],'Pillars and beams form a rigid internal skeleton.'],
+  ['Cranes were designed to…',['Multiply human force to lift loads','Store honey','Keep air inside','Decorate buildings'],'Cranes, used since Ancient Greece, multiply human force to lift materials.'],
+  ['The form of a structure depends mainly on…',['The main stress it supports and the weight of its materials','The colour of its materials','The age of the builders','The weather that day'],'The main type of stress and the weight of the available materials (stone, steel…) dictate the form.'],
+];
+const Q={
+  enter(){this.qs=shuffle(QS.slice()).slice(0,10).map(([q,o,e])=>{const opts=shuffle(o.map((t,i)=>({t,ok:i===0})));return {q,opts,e};});this.i=0;this.score=0;this.ans=null;
+    const tb=frameBridge();tb.position.y=.12;models.add(tb);modelUpdate=dt=>{tb.rotation.y+=dt*.3;};},
+  draw(){H(term('Final test','Examen final'),'STATION 5');
+    if(this.i>=10){const s=this.score;PROG.quizBest=Math.max(PROG.quizBest||0,s);save();
+      T(`Your mark: ${s} / 10`,40,230,56,s>=5?'#15803d':'#b91c1c',800);
+      W(s===10?'Excellent! You are ready for the exam.':s>=7?'Very good! Repeat the test to aim for 10.':s>=5?'You passed. Review the stations where you failed and try again.':'Review stations 2 and 3 and try again — you can do it!',40,300,930,28);
+      B('Try again',40,550,240,64,()=>go(Q),{bg:'#374151'});B('Menu',740,550,240,64,()=>go(MENU),{bg:'#2f7fd6'});if(!this.played){this.played=true;s>=5?SFX.win():SFX.no();}return;}
+    this.played=false;const q=this.qs[this.i];T(`Question ${this.i+1} / 10   ·   Score ${this.score}`,40,160,22,'#6b7280',600);
+    W(q.q,40,205,930,30,'#111827',700);
+    q.opts.forEach((o,j)=>{let bg='#1f2937';if(this.ans!==null){if(o.ok)bg='#15803d';else if(j===this.ans)bg='#b91c1c';else bg='#9ca3af';}
+      B(o.t,40+(j%2)*470,290+Math.floor(j/2)*82,450,70,()=>{if(this.ans!==null)return;this.ans=j;if(o.ok){this.score++;SFX.ok();}else SFX.no();pulse(.4,50);},{bg,size:22});});
+    if(this.ans!==null){W(q.e,40,480,700,23,q.opts[this.ans].ok?'#15803d':'#b91c1c',600);B(this.i<9?'Next ▶':'See my mark ▶',760,550,220,64,()=>{this.i++;this.ans=null;},{bg:'#2f7fd6'});}
+    else B('◀ Menu',40,550,180,64,()=>go(MENU),{bg:'#e5e7eb',fg:'#111827'});}
+};
+
+// ================= pointing & input =================
+const ray=new THREE.Raycaster(), tmpM=new THREE.Matrix4();
+function pick(){const hits=ray.intersectObjects([panel,...clickables],true);
+  for(const h of hits){if(h.object===panel)return {kind:'panel',btn:buttonAt(h.uv),dist:h.distance};let o=h.object;while(o&&!o.userData.onClick)o=o.parent;if(o)return {kind:'obj',obj:o,dist:h.distance};}return null;}
+function setHover(h){const b=h&&h.kind==='panel'?h.btn:-1;if(b!==hoverIdx){hoverIdx=b;redraw();}
+  const o=h&&h.kind==='obj'?h.obj:null;if(o!==hoverObj){if(hoverObj)hoverObj.scale.setScalar(1);hoverObj=o;if(o)o.scale.setScalar(1.15);}}
+function activate(h){if(!h)return;initAudio();
+  if(h.kind==='panel'&&h.btn>=0){const fn=UI[h.btn].fn;SFX.click();pulse(.3,30);fn&&fn();redraw();}
+  else if(h.kind==='obj'){SFX.click();pulse(.3,30);h.obj.userData.onClick();redraw();}}
+const ctrls=[0,1].map(i=>{const c=renderer.xr.getController(i);
+  const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints([new V3(),new V3(0,0,-1)]),new THREE.LineBasicMaterial({color:0x2b7cff}));c.add(line);
+  const tip=new THREE.Mesh(new THREE.SphereGeometry(.008,10,8),new THREE.MeshBasicMaterial({color:0x2b7cff}));c.add(tip);
+  c.userData={line,tip,on:false,hit:null};
+  c.addEventListener('connected',e=>{c.userData.on=true;c.userData.hand=e.data.handedness;});
+  c.addEventListener('disconnected',()=>{c.userData.on=false;});
+  c.addEventListener('select',()=>activate(c.userData.hit));
+  rig.add(c);return c;});
+
+// screen controls
+let orbit={yaw:0,pitch:.08,dist:1.55}, flatHit=null, down=null;
+const target=new V3(0,1.4,-1.05), mouse=new THREE.Vector2();
+const cv=renderer.domElement;
+function screenRay(e){mouse.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);ray.setFromCamera(mouse,camera);}
+cv.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY,m:0};cv.setPointerCapture(e.pointerId);});
+cv.addEventListener('pointermove',e=>{if(renderer.xr.isPresenting)return;
+  if(down){const dx=e.clientX-down.x,dy=e.clientY-down.y;down.m+=Math.abs(dx)+Math.abs(dy);down.x=e.clientX;down.y=e.clientY;
+    if(down.m>6){orbit.yaw=clamp(orbit.yaw-dx*.005,-1.4,1.4);orbit.pitch=clamp(orbit.pitch+dy*.004,-.2,1.1);}}
+  else if(e.pointerType==='mouse'){screenRay(e);flatHit=pick();}});
+cv.addEventListener('pointerup',e=>{if(down&&down.m<8&&!renderer.xr.isPresenting){screenRay(e);activate(pick());flatHit=e.pointerType==='mouse'?pick():null;}down=null;});
+cv.addEventListener('wheel',e=>{orbit.dist=clamp(orbit.dist+e.deltaY*.001,.8,3);},{passive:true});
+function updateFlatCam(){const d=orbit.dist*(camera.aspect<1?1.15/camera.aspect:1);
+  camera.position.set(target.x+Math.sin(orbit.yaw)*Math.cos(orbit.pitch)*d,target.y+Math.sin(orbit.pitch)*d,target.z+Math.cos(orbit.yaw)*Math.cos(orbit.pitch)*d);camera.lookAt(target);}
+
+// ================= XR sessions =================
+let alignFrames=0;const head=new V3(),fwd=new V3();
+function alignStage(){camera.getWorldPosition(head);camera.getWorldDirection(fwd);fwd.y=0;if(fwd.lengthSq()<1e-4)fwd.set(0,0,-1);fwd.normalize();
+  stage.position.set(head.x,head.y-1.55,head.z);stage.rotation.set(0,Math.atan2(-fwd.x,-fwd.z),0);}
+async function enterXR(kind){initAudio();
+  if(!navigator.xr){$('status').textContent='This browser has no WebXR. Open the page in the Meta Quest 3 browser.';return;}
+  try{const s=await navigator.xr.requestSession(kind==='ar'?'immersive-ar':'immersive-vr',kind==='ar'?{requiredFeatures:['local-floor'],optionalFeatures:['hand-tracking']}:{optionalFeatures:['local-floor','bounded-floor','hand-tracking']});
+    const ar=kind==='ar';env.visible=!ar;table.visible=!ar;scene.background=ar?null:BG;
+    await renderer.xr.setSession(s);alignFrames=12;$('start').style.display='none';
+    s.addEventListener('end',()=>{env.visible=true;table.visible=true;scene.background=BG;stage.position.set(0,0,0);stage.rotation.set(0,0,0);camera.position.set(0,1.4,0);showStart();});
+    go(MENU);
+  }catch(err){$('status').textContent='Could not start ('+(err&&err.message||err)+'). On the Quest, open the HTML file hosted on an HTTPS website.';}}
+function showStart(){$('start').style.display='flex';$('back').style.display='none';$('hint').style.display='none';}
+$('bVR').onclick=()=>enterXR('vr');$('bAR').onclick=()=>enterXR('ar');
+$('bFlat').onclick=()=>{initAudio();$('start').style.display='none';$('back').style.display='block';$('hint').style.display='block';go(MENU);};
+$('back').onclick=showStart;
+(async()=>{let vr=false,ar=false;if(navigator.xr){try{vr=await navigator.xr.isSessionSupported('immersive-vr');}catch(e){}try{ar=await navigator.xr.isSessionSupported('immersive-ar');}catch(e){}}
+  $('bVR').disabled=!vr;$('bAR').disabled=!ar;$('status').textContent=vr||ar?'Headset detected ✓':'WebXR is not available here. You can study on screen, or open this page in the Meta Quest 3 browser.';})();
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+
+// ================= loop =================
+const clock=new THREE.Clock();
+renderer.setAnimationLoop(()=>{const dt=Math.min(clock.getDelta(),.05),xr=renderer.xr.isPresenting;
+  if(xr&&alignFrames>0){alignFrames--;if(alignFrames===0)alignStage();}
+  let hit=null;
+  if(xr){for(const c of ctrls){const u=c.userData;if(!u.on){u.line.visible=u.tip.visible=false;continue;}c.updateMatrixWorld();tmpM.identity().extractRotation(c.matrixWorld);
+      ray.ray.origin.setFromMatrixPosition(c.matrixWorld);ray.ray.direction.set(0,0,-1).applyMatrix4(tmpM);ray.near=0;ray.far=10;
+      const h=pick();u.hit=h;u.line.visible=u.tip.visible=true;const L=h?h.dist:1.5;u.line.scale.z=L;u.tip.position.set(0,0,-L);if(h&&(!hit||u.hand==='right'))hit=h;}}
+  else{updateFlatCam();hit=flatHit;}
+  setHover(hit);if(modelUpdate)modelUpdate(dt);
+  renderer.render(scene,camera);});
+go(MENU);
+window.__go=n=>{const S={MENU,S1A,S1B,S2A,S2B,S2C,S3,S4,Q};if(S[n])go(S[n]);else if(n.startsWith('type'))(S3.i=+n.slice(4),go(S3));else if(n==='stress')(S2B.sel=4,S2B.drv.want('bend'),redraw());else if(n==='act')(S3.inst.actions()[0][1](),redraw());else if(n==='drive')(S4.pred='truss',S4.build('square'),S4.run(),redraw());};
+document.fonts&&document.fonts.load('600 30px Inter').then(()=>redraw()).catch(()=>{});
+</script>
+</body>
+</html>
